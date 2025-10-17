@@ -2,7 +2,7 @@ name: Continuous Deployment
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 env:
   ECR_REGISTRY: 398803372580.dkr.ecr.ap-south-1.amazonaws.com
