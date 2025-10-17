@@ -1,20 +1,18 @@
-# CI pipeline for ecoligo application
-# Runs when someone creates a pull request to check code quality
-#
-
-name: CI - Code Validation
+name: Continuous Integration
 
 on:
   pull_request:
     branches: [main, dev]
+  push:
+    branches: [main, dev]
 
 jobs:
-  validate-code:
-    name: Check Code Quality
+  test-and-build:
+    name: Test and Build
     runs-on: self-hosted
     
     steps:
-    - name: Get the code
+    - name: Checkout code
       uses: actions/checkout@v4
       
     - name: Setup Python
@@ -22,36 +20,30 @@ jobs:
       with:
         python-version: '3.13'
         
-    - name: Install packages we need
+    - name: Install uv
       run: |
-        pip install -r requirements.txt
-        # Make sure pytest is there for running tests
-        pip install pytest pytest-cov
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
         
-    - name: Run the test suite
+    - name: Install dependencies with uv
       run: |
-        # Use the existing Makefile target if it works
-        make unittest || pytest tests/ -v --cov=app --cov-report=term-missing
+        uv sync
+        uv pip install -r requirements.txt
         
-    - name: Quick check that app loads
+    - name: Run unit tests
       run: |
-        python -c "import app; print('App imports ok')"
-        python -c "from app.main import app; print('FastAPI app loads fine')"
+        make unittest
         
-    - name: Build the container image
+    - name: Run linting (optional)
       run: |
-        docker build -t ecoligo-app-ci-test .
-        echo "Container builds successfully"
+        uv pip install flake8 black
+        flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        black app/ --check
         
-    - name: Test the cronjob script
+    - name: Build Docker image
       run: |
-        cd scripts
-        python hourly_cronjob.py || echo "Cronjob ran but had warnings"
+        docker build -t ecoligo-app:ci-${{ github.sha }} .
         
-    - name: Check Helm charts are valid
+    - name: Test Docker image
       run: |
-        helm lint kubernetes/helm/ecoligo-app/ || echo "Helm charts need checking"
-        
-    - name: CI done
-      run: |
-        echo "CI pipeline completed - code looks good for review"
+        docker run --rm ecoligo-app:ci-${{ github.sha }} python -c "from app.main import app; print('App starts successfully')"
