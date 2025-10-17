@@ -26,16 +26,16 @@ jobs:
       run: |
         make unittest
 
-    - name: Generate build number for CI
-      id: ci_build_number
+    - name: Generate image tag
+      id: tag
       run: |
         SHORT_SHA=$(git rev-parse --short HEAD)
-        echo "Using commit SHA for CI: $SHORT_SHA"
+        echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
 
     - name: Build Docker image
       run: |
-        docker build -t ecoligo-app:ci-${{ github.sha }} .
+        docker build -t ecoligo-app:ci-${{ steps.tag.outputs.short_sha }} .
 
     - name: Test Docker image
       run: |
-        docker run --rm ecoligo-app:ci-${{ github.sha }} python -c "from app.main import app; print('App starts successfully')"
+        docker run --rm ecoligo-app:ci-${{ steps.tag.outputs.short_sha }} python -c "from app.main import app; print('App starts successfully')"
