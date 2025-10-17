@@ -17,8 +17,8 @@ jobs:
     runs-on: self-hosted
 
     outputs:
-      image_tag: ${{ steps.build_number.outputs.build_number }}
-      chart_version: ${{ steps.build_number.outputs.build_number }}
+      image_tag: ${{ steps.tag.outputs.short_sha }}
+      chart_version: ${{ steps.tag.outputs.short_sha }}
 
     steps:
     - name: Checkout code
@@ -35,34 +35,25 @@ jobs:
       run: |
         aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
 
-    - name: Generate sequential build number
-      id: build_number
+    - name: Generate image tag
+      id: tag
       run: |
-        # Get the next build number from a file or start from 1
-        if [ -f .github/build-number ]; then
-          CURRENT_BUILD=$(cat .github/build-number)
-          NEXT_BUILD=$((CURRENT_BUILD + 1))
-        else
-          mkdir -p .github
-          NEXT_BUILD=1
-        fi
-        echo $NEXT_BUILD > .github/build-number
-        echo "build_number=$NEXT_BUILD" >> $GITHUB_OUTPUT
-        echo "Using build number: $NEXT_BUILD"
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
 
     - name: Update Helm chart version
       run: |
-        # Update Chart.yaml with the build number
-        sed -i "s/version: .*/version: 1.0.${{ steps.build_number.outputs.build_number }}/" $HELM_CHART/Chart.yaml
+        # Update Chart.yaml with git SHA
+        sed -i "s/version: .*/version: 1.0.${{ steps.tag.outputs.short_sha }}/" $HELM_CHART/Chart.yaml
 
     - name: Build Docker image
       run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ steps.build_number.outputs.build_number }} .
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ steps.tag.outputs.short_sha }} .
 
     - name: Push to ECR
       run: |
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ steps.build_number.outputs.build_number }}
-        echo "Successfully pushed image with tag: ${{ steps.build_number.outputs.build_number }}"
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ steps.tag.outputs.short_sha }}
+        echo "Successfully pushed image with tag: ${{ steps.tag.outputs.short_sha }}"
 
   deploy-to-eks:
     name: Deploy to EKS
@@ -102,7 +93,7 @@ jobs:
     - name: Verify deployment
       run: |
         kubectl rollout status deployment/ecoligo-app -n $K8S_NAMESPACE --timeout=300s
-        echo "Deployment successful! Build number: ${{ needs.build-and-push.outputs.image_tag }}"
+        echo "Deployment successful! Git SHA: ${{ needs.build-and-push.outputs.image_tag }}"
 
     - name: Check resources
       run: |
