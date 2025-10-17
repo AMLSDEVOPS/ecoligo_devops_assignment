@@ -26,6 +26,12 @@ jobs:
       run: |
         make unittest
 
+    - name: Generate build number for CI
+      id: ci_build_number
+      run: |
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        echo "Using commit SHA for CI: $SHORT_SHA"
+
     - name: Build Docker image
       run: |
         docker build -t ecoligo-app:ci-${{ github.sha }} .
