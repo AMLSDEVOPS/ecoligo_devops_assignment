@@ -1,62 +1,64 @@
-name: CD Pipeline - Production Deployment
+name: Continuous Deployment
 
 on:
   push:
     branches: [main]
 
 env:
-  CLUSTER_NAME: corporate-secondary
-  AWS_REGION: us-east-1
-  ECR_REGION: ap-south-1
   ECR_REGISTRY: 398803372580.dkr.ecr.ap-south-1.amazonaws.com
-  ECR_REPO: ecoligovenkat
-  NAMESPACE: ecoligo-production
+  ECR_REPOSITORY: ecoligovenkat
+  EKS_CLUSTER: corporate-secondary
+  K8S_NAMESPACE: ecoligo-production
+  HELM_CHART: kubernetes/helm/ecoligo-app
 
 jobs:
   build-and-push:
-    name: Build and Push Container
+    name: Build and Push to ECR
     runs-on: self-hosted
     
     outputs:
-      image_tag: ${{ steps.tag.outputs.sha }}
+      image_tag: ${{ steps.tag.outputs.short_sha }}
+      chart_version: ${{ steps.version.outputs.chart_version }}
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Configure AWS credentials for ECR
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.ECR_REGION }}
+        aws-region: ap-south-1
         
     - name: Login to ECR
       run: |
-        aws ecr get-login-password --region $ECR_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+        aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin $ECR_REGISTRY
         
-    - name: Generate unique image tag
+    - name: Generate image tag
       id: tag
       run: |
         SHORT_SHA=$(git rev-parse --short HEAD)
+        echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+        
+    - name: Update Helm chart version
+      id: version
+      run: |
         TIMESTAMP=$(date +%s)
-        # Combine SHA and timestamp to ensure uniqueness
-        # tested
-        UNIQUE_TAG="${SHORT_SHA}-${TIMESTAMP}"
-        echo "sha=$UNIQUE_TAG" >> $GITHUB_OUTPUT
-        echo "Using unique image tag: $UNIQUE_TAG"
+        echo "chart_version=0.1.$TIMESTAMP" >> $GITHUB_OUTPUT
+        # Update Chart.yaml with new version
+        sed -i "s/version: .*/version: 0.1.$TIMESTAMP/" $HELM_CHART/Chart.yaml
         
     - name: Build Docker image
       run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPO:${{ steps.tag.outputs.sha }} .
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ steps.tag.outputs.short_sha }} .
         
-    - name: Push image to ECR
+    - name: Push to ECR
       run: |
-        docker push $ECR_REGISTRY/$ECR_REPO:${{ steps.tag.outputs.sha }}
-        echo "Successfully pushed image: $ECR_REGISTRY/$ECR_REPO:${{ steps.tag.outputs.sha }}"
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ steps.tag.outputs.short_sha }}
 
-  deploy-with-helm:
-    name: Deploy with Helm
+  deploy-to-eks:
+    name: Deploy to EKS
     runs-on: self-hosted
     needs: build-and-push
     
@@ -64,72 +66,67 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Configure AWS for EKS
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+        aws-region: us-east-1
         
-    - name: Connect to EKS cluster
+    - name: Configure EKS access
       run: |
-        aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
+        aws eks update-kubeconfig --region us-east-1 --name $EKS_CLUSTER
         
-    - name: Create namespace if needed
+    - name: Create namespace if not exists
       run: |
-        kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+        kubectl create namespace $K8S_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
         
-    - name: Clean up existing conflicting resources
+    - name: Deploy with Helm
+      id: deploy
       run: |
-        echo "Checking for existing resources that might conflict with Helm..."
-        # Only delete if they exist and don't have Helm labels
-        kubectl get service ecoligo-app -n $NAMESPACE > /dev/null 2>&1 && \
-          kubectl get service ecoligo-app -n $NAMESPACE -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' | grep -q Helm || \
-          kubectl delete service ecoligo-app -n $NAMESPACE --ignore-not-found=true
-        
-        kubectl get deployment ecoligo-app -n $NAMESPACE > /dev/null 2>&1 && \
-          kubectl get deployment ecoligo-app -n $NAMESPACE -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' | grep -q Helm || \
-          kubectl delete deployment ecoligo-app -n $NAMESPACE --ignore-not-found=true
-        
-        kubectl get cronjob ecoligo-app-cron -n $NAMESPACE > /dev/null 2>&1 && \
-          kubectl get cronjob ecoligo-app-cron -n $NAMESPACE -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' | grep -q Helm || \
-          kubectl delete cronjob ecoligo-app-cron -n $NAMESPACE --ignore-not-found=true
-        
-        echo "Cleanup check completed"
-        
-    - name: Deploy using Helm
-      run: |
-        helm upgrade --install ecoligo-app ./kubernetes/helm/ecoligo-app \
+        helm upgrade --install ecoligo-app $HELM_CHART \
+          --namespace $K8S_NAMESPACE \
+          --set image.repository=$ECR_REGISTRY/$ECR_REPOSITORY \
           --set image.tag=${{ needs.build-and-push.outputs.image_tag }} \
-          --namespace $NAMESPACE \
-          --timeout 10m \
-          --atomic \
-          --wait
+          --set image.pullPolicy=Always \
+          --set replicaCount=2 \
+          --wait --timeout 300s
         
     - name: Verify deployment
       run: |
-        echo "Checking deployment status..."
-        kubectl rollout status deployment/ecoligo-app -n $NAMESPACE --timeout=300s
+        kubectl rollout status deployment/ecoligo-app -n $K8S_NAMESPACE --timeout=300s
         echo "Deployment successful!"
         
-    - name: Check all resources
+    - name: Check resources
       run: |
-        echo "=== Helm Release ==="
-        helm list -n $NAMESPACE
-        echo ""
-        echo "=== Pods ==="
-        kubectl get pods -n $NAMESPACE -l app=ecoligo-app
-        echo ""
-        echo "=== Services ==="
-        kubectl get svc -n $NAMESPACE -l app=ecoligo-app
-        echo ""
-        echo "=== CronJobs ==="
-        kubectl get cronjobs -n $NAMESPACE -l app=ecoligo-app
-        echo ""
-        echo "=== HPA ==="
-        kubectl get hpa -n $NAMESPACE -l app=ecoligo-app || echo "HPA not found yet"
+        kubectl get pods,svc,hpa -n $K8S_NAMESPACE
+
+  rollback-on-failure:
+    name: Rollback on Failure
+    runs-on: self-hosted
+    needs: deploy-to-eks
+    if: failure()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
         
-    - name: CD completion
+    - name: Configure EKS access
       run: |
-        echo "CD pipeline completed successfully"
-        echo "Application deployed to production"
+        aws eks update-kubeconfig --region us-east-1 --name $EKS_CLUSTER
+        
+    - name: Rollback deployment
+      run: |
+        helm rollback ecoligo-app -n $K8S_NAMESPACE --wait --timeout 300s
+        echo "Rollback completed successfully"
+        
+    - name: Send failure notification
+      run: |
+        echo "Deployment failed and was rolled back. Please check the logs."
