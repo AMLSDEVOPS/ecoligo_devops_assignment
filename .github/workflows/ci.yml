@@ -8,27 +8,34 @@ jobs:
   test-and-build:
     name: Test and Build
     runs-on: self-hosted
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Setup Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.13'
-        
+
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
-        
+
     - name: Run unit tests
       run: |
         make unittest
+        
+    - name: Generate build number for CI
+      id: ci_build_number
+      run: |
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        echo "Using commit SHA for CI: $SHORT_SHA"
+
     - name: Build Docker image
       run: |
         docker build -t ecoligo-app:ci-${{ github.sha }} .
-        
+
     - name: Test Docker image
       run: |
         docker run --rm ecoligo-app:ci-${{ github.sha }} python -c "from app.main import app; print('App starts successfully')"
