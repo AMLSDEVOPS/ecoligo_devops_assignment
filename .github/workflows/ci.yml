@@ -20,10 +20,9 @@ jobs:
       with:
         python-version: '3.13'
         
-    - name: Install dependencies with uv
+    - name: Install dependencies
       run: |
-        uv sync
-        uv pip install -r requirements.txt
+        pip install -r requirements.txt
         
     - name: Run unit tests
       run: |
@@ -31,6 +30,7 @@ jobs:
         
     - name: Run linting
       run: |
+        pip install flake8 black
         flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
         black app/ --check
         
