@@ -20,11 +20,6 @@ jobs:
       with:
         python-version: '3.13'
         
-    - name: Install uv
-      run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-        
     - name: Install dependencies with uv
       run: |
         uv sync
@@ -34,9 +29,8 @@ jobs:
       run: |
         make unittest
         
-    - name: Run linting (optional)
+    - name: Run linting
       run: |
-        uv pip install flake8 black
         flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
         black app/ --check
         
