@@ -2,7 +2,7 @@ name: Continuous Deployment
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 env:
   ECR_REGISTRY: 398803372580.dkr.ecr.ap-south-1.amazonaws.com
@@ -49,7 +49,7 @@ jobs:
         echo $NEXT_BUILD > .github/build-number
         echo "build_number=$NEXT_BUILD" >> $GITHUB_OUTPUT
         echo "Using build number: $NEXT_BUILD"
-        
+
     - name: Update Helm chart version
       run: |
         # Update Chart.yaml with the build number
