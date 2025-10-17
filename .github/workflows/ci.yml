@@ -25,7 +25,7 @@ jobs:
     - name: Run unit tests
       run: |
         make unittest
-        
+
     - name: Generate build number for CI
       id: ci_build_number
       run: |
